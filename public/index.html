@@ -1,0 +1,108 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bluff or Bust</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#100d20;color:#f7f4ff;font:16px system-ui,sans-serif}
+main{max-width:850px;margin:auto;padding:24px 16px}
+.card{background:#211a3a;border:1px solid #51436e;border-radius:16px;padding:20px;margin:16px 0}
+h1{color:#f3c969}input,select,button{font:inherit;padding:11px;border-radius:9px;border:1px solid #69568b;background:#100d20;color:white;max-width:100%}
+input{width:100%;margin:8px 0}button{cursor:pointer;margin:4px}button.primary{background:#f3c969;color:#21142b;font-weight:bold}
+.hidden{display:none!important}.muted{color:#b7b0d0}.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1}
+.player{padding:10px;border-bottom:1px solid #ffffff22}
+.option{display:block;width:100%;text-align:left;margin:8px 0}.selected{outline:2px solid #f3c969}
+.big{font-size:28px;color:#f3c969;font-weight:bold}
+</style>
+</head>
+<body><main>
+<header><h1>🎭 BLUFF OR BUST</h1><p class="muted">Trivia · Deception · Strategy</p></header>
+<section id="home" class="card">
+<h2>Join the game</h2>
+<label>Your name</label><input id="name" maxlength="20" value="Player">
+<div class="row"><button class="primary" id="create">Create room</button><input id="joinCode" placeholder="Room code"><button id="join">Join room</button></div>
+<p id="error"></p>
+</section>
+<section id="game" class="hidden">
+<div class="card">
+<p>Room code</p><div class="big" id="roomCode"></div>
+<p id="round"></p><p id="phase"></p><p id="wallet"></p><p id="score"></p>
+<button id="start" class="primary">Start game</button>
+<h3>Players</h3><div id="players"></div>
+</div>
+<div id="play" class="card hidden">
+<h2 id="question"></h2><p id="claimant"></p>
+<div id="options"></div>
+<div id="answerButtons" class="hidden">
+<button class="primary" id="honest">Submit honestly</button>
+<button id="bluff">Submit as a bluff</button>
+</div>
+<div id="betControls" class="hidden">
+<h3>Predict the answer and the bluffer</h3>
+<label>Is the submitted answer correct?</label>
+<select id="truth"><option value="">Skip</option><option value="true">Correct</option><option value="false">Incorrect</option></select>
+<label>Truth wager</label><select id="ts"><option>1</option><option>2</option><option>3</option></select>
+<label>Is the player bluffing?</label>
+<select id="bluffer"><option value="">Skip</option><option value="true">Bluffing</option><option value="false">Honest</option></select>
+<label>Bluffer wager</label><select id="bs"><option>1</option><option>2</option><option>3</option></select>
+<button class="primary" id="lock">Lock predictions</button>
+</div>
+<div id="result"></div>
+<button id="next" class="primary hidden">Next round</button>
+</div>
+</section>
+<script>
+const $=id=>document.getElementById(id);
+let code="",pid="",state=null,answer="",timer=null;
+async function request(event,data={}){
+ const r=await fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event,data:{...data,code,playerId:pid}})});
+ return r.json();
+}
+async function enter(event,data){
+ const r=await fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event,data})}).then(x=>x.json());
+ if(!r.ok){$("error").textContent=r.error;return}
+ code=r.code;pid=r.playerId;$("home").classList.add("hidden");$("game").classList.remove("hidden");
+ if(timer)clearInterval(timer);render(r.state);timer=setInterval(refresh,1200);
+}
+async function refresh(){
+ try{const r=await fetch(`/api/state?code=${encodeURIComponent(code)}&playerId=${encodeURIComponent(pid)}`).then(x=>x.json());if(r.ok)render(r.state)}catch(e){}
+}
+function render(s){
+ state=s;$("roomCode").textContent=s.code;$("round").textContent=`Round ${s.round} / ${s.totalRounds}`;
+ $("phase").textContent=s.message||s.phase;
+ const me=s.players.find(p=>p.id===pid);
+ $("wallet").textContent=`Tokens: ${me?.tokens??0}`;$("score").textContent=`Points: ${me?.score??0}`;
+ $("players").innerHTML=s.players.map(p=>`<div class="player">${esc(p.name)} — ${p.score} pts, ${p.tokens} tokens ${p.id===s.hostId?"(HOST)":""}</div>`).join("");
+ $("start").classList.toggle("hidden",s.status!=="lobby"||s.hostId!==pid);$("start").disabled=s.players.length<2;
+ $("play").classList.toggle("hidden",s.status==="lobby"||!s.current);
+ if(!s.current)return;
+ $("question").textContent=s.current.question;
+ $("claimant").textContent="Featured player: "+(s.players.find(p=>p.id===s.current.claimantId)?.name||"Player");
+ $("options").innerHTML="";$("answerButtons").classList.add("hidden");$("betControls").classList.add("hidden");
+ $("result").textContent="";$("next").classList.add("hidden");
+ if(s.phase==="answer"&&s.current.claimantId===pid){
+  $("answerButtons").classList.remove("hidden");
+  if($("options").dataset.q!==s.current.question){
+   $("options").dataset.q=s.current.question;answer="";
+   s.current.options.forEach(o=>{let b=document.createElement("button");b.className="option";b.textContent=o;b.onclick=()=>{answer=o;document.querySelectorAll(".option").forEach(x=>x.classList.remove("selected"));b.classList.add("selected")};$("options").append(b)});
+  }else $("options").innerHTML=[...$("options").children].map(x=>x.outerHTML).join("");
+ }else if(s.phase==="bets"&&s.current.claimantId!==pid){$("betControls").classList.remove("hidden")}
+ else if(s.phase==="reveal"){
+  $("result").textContent=`Correct answer: ${s.current.result?.correctAnswer||"—"}. Submitted: ${s.current.result?.submittedAnswer||"—"}. ${s.current.result?.bluff?"The player bluffed.":"The player was honest."}`;
+  if(s.hostId===pid)$("next").classList.remove("hidden");
+ }else $("result").textContent=s.message||s.phase;
+ if(s.status==="finished")$("result").textContent="Match complete!";
+}
+function esc(x){return String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+$("create").onclick=()=>enter("createRoom",{name:$("name").value.trim()||"Player"});
+$("join").onclick=()=>enter("joinRoom",{name:$("name").value.trim()||"Player",code:$("joinCode").value.trim().toUpperCase()});
+$("start").onclick=async()=>{let r=await request("startGame");if(!r.ok)alert(r.error);refresh()};
+async function sendAnswer(bluff){if(!answer){alert("Choose an answer first.");return}let r=await request("submitAnswer",{answer,bluff});if(!r.ok)alert(r.error);refresh()}
+$("honest").onclick=()=>sendAnswer(false);$("bluff").onclick=()=>sendAnswer(true);
+$("lock").onclick=async()=>{let r=await request("submitBets",{truth:$("truth").value||null,bluffer:$("bluffer").value||null,truthStake:+$("ts").value,blufferStake:+$("bs").value});if(!r.ok)alert(r.error);else $("lock").disabled=true;refresh()};
+$("next").onclick=async()=>{let r=await request("nextRound");if(!r.ok)alert(r.error);refresh()};
+</script></main></body>
+</html>
